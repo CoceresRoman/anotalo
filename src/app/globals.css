@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-cream: #fdfcf9;
+  --color-ink: #1a1a1a;
+  --color-ink-muted: #55524a;
+  --color-ink-faint: #8a8672;
+  --color-hairline: #1a1a1a1f;
+  --color-alert: #c0392b;
+  --color-ok: #2f6b45;
+  color-scheme: light;
+}
+
+/* Inverted-but-legible dark palette: cream/ink swap roles, muted/faint are
+   lightened so they stay readable on a dark background, and alert/ok get a
+   touch more lightness to keep enough contrast on dark. Exact values are a
+   judgment call verified against WCAG AA contrast ratios, not pinned by
+   the plan. */
+html[data-theme="dark"] {
+  --color-cream: #1a1a1a;
+  --color-ink: #fdfcf9;
+  --color-ink-muted: #b9b6a8;
+  --color-ink-faint: #8f8a78;
+  --color-hairline: #fdfcf926;
+  --color-alert: #e2574a;
+  --color-ok: #4caf6e;
+  color-scheme: dark;
+}
+
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+
+body {
+  color: var(--color-ink);
+  background: var(--color-cream);
+  font-family: Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tailwind's preflight doesn't reset input/select/textarea backgrounds, so
+   without this they keep the browser's native white background in dark
+   mode (where text-ink flips to near-white) and typed/existing text becomes
+   near-invisible. color-scheme above tells the browser to theme native form
+   chrome (backgrounds, scrollbars, etc.) per theme; this rule makes sure the
+   actual background/text colors follow the same cream/ink variables as the
+   rest of the page. Existing Tailwind classes on these elements (e.g.
+   border-hairline text-ink) are untouched and still apply on top. */
+input,
+select,
+textarea {
+  background: var(--color-cream);
+  color: var(--color-ink);
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+

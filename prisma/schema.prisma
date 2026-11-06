@@ -1,0 +1,199 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Note.source, Note.type and Reminder.status are plain String fields, not
+// Prisma `enum`, because the `sqlite` connector does not support `enum`.
+// The allowed values are enforced at the TypeScript layer via union types
+// in application code (e.g. `type NoteType = "gasto" | "idea" | "recordatorio" | "no_identificado"`).
+
+model Note {
+  id                String   @id @default(cuid())
+  rawText           String
+  source            String // "text" | "audio"
+  type              String // "gasto" | "idea" | "recordatorio" | "no_identificado"
+  whatsappMessageId String   @unique
+  createdAt         DateTime @default(now())
+
+  expense  Expense?
+  reminder Reminder?
+  income            Income?
+  saving            Saving?
+  recurringPayments RecurringPayment[]
+}
+
+model Expense {
+  id          String   @id @default(cuid())
+  noteId      String   @unique
+  amountCents Int
+  category    String?
+  // ISO-4217-style code ("ARS", "USD", ...). Plain String like Note.type
+  // (sqlite has no enum). Only "ARS" rows are summed into the peso totals;
+  // any other currency is stored and listed but never converted or added
+  // (spec Non-goals: no multi-currency conversion).
+  currency    String   @default("ARS")
+  occurredAt  DateTime
+
+  note Note @relation(fields: [noteId], references: [id])
+}
+
+model Reminder {
+  id               String    @id @default(cuid())
+  noteId           String    @unique
+  parsedDatetime   DateTime?
+  status           String // "queued" | "awaiting_confirmation" | "confirming" | "confirmed" | "rejected" | "ambiguous_no_date"
+  calendarEventId  String?
+  createdAt        DateTime  @default(now())
+
+  note Note @relation(fields: [noteId], references: [id])
+}
+
+// At most one row ever exists at a time (enforced in application code,
+// deleteFlow.ts): the in-flight WhatsApp delete confirmation/disambiguation,
+// mirroring Reminder's "only one awaiting_confirmation/confirming at a time"
+// invariant but for note-deletion requests instead of recordatorios. Both
+// invariants share the same slot — requestDelete refuses to create this row
+// while a Reminder is awaiting_confirmation/confirming, and
+// claimNextQueuedReminder refuses to promote a reminder while this row
+// exists.
+model PendingDeletion {
+  id          String   @id @default(cuid())
+  stage       String // "confirming" | "disambiguating"
+  noteIds     String // JSON-encoded string[] de Note.id candidatos
+  requestedAt DateTime @default(now())
+}
+
+model Income {
+  id          String   @id @default(cuid())
+  noteId      String   @unique
+  amountCents Int
+  isSalary    Boolean
+  currency    String   @default("ARS")
+  occurredAt  DateTime
+
+  note Note @relation(fields: [noteId], references: [id])
+}
+
+// Un tercer tipo de movimiento junto a Expense/Income — plata que el
+// usuario ya tenía y aparta (positivo) o retira (negativo, amountCents <
+// 0). El total acumulado (suma de TODOS los Saving, sin filtro de mes) es
+// lo que se compara contra un objetivo de compra; el saldo mensual del
+// dashboard solo resta el neto de ESTE mes.
+model Saving {
+  id          String   @id @default(cuid())
+  noteId      String   @unique
+  amountCents Int
+  currency    String   @default("ARS")
+  occurredAt  DateTime
+
+  note Note @relation(fields: [noteId], references: [id])
+}
+
+model RecurringGroup {
+  id    String @id @default(cuid())
+  name  String
+
+  items RecurringItem[]
+}
+
+model RecurringItem {
+  id                String   @id @default(cuid())
+  name              String
+  amountCents       Int
+  // null = indefinida (Netflix, gimnasio); un número = compra a plazos que
+  // termina sola cuando la cuota calculada lo supera.
+  totalInstallments Int?
+  // Cuota en la que arranca a contar (1 salvo que se cargue a mitad de
+  // camino, ej. "arranca en la cuota 5 de 12").
+  startInstallment  Int      @default(1)
+  // "YYYY-MM", mes calendario de Argentina en el que startInstallment es
+  // la cuota vigente — la base desde la que se calculan los meses
+  // siguientes (src/lib/cuotas.ts).
+  startYearMonth    String
+  groupId           String?
+  createdAt         DateTime @default(now())
+
+  group    RecurringGroup?    @relation(fields: [groupId], references: [id])
+  payments RecurringPayment[]
+}
+
+// Una fila por (item, mes) en el que se pagó — la ausencia de fila para un
+// (item, mes) dado ya significa "no pagado", así el reseteo mensual no
+// necesita ningún job. `noteId` NO es único: cuando se paga un agrupador
+// entero de una vez, cada item bajo él recibe su propia fila apuntando al
+// MISMO Note/Expense (un solo gasto representa el pago combinado) — borrar
+// ese Note (deleteNoteCascading, Task 4) borra todas esas filas juntas,
+// que es exactamente "deshacer el pago del agrupador" en un solo paso.
+model RecurringPayment {
+  id        String   @id @default(cuid())
+  itemId    String
+  yearMonth String
+  noteId    String
+  paidAt    DateTime @default(now())
+
+  item RecurringItem @relation(fields: [itemId], references: [id])
+  note Note          @relation(fields: [noteId], references: [id])
+
+  @@unique([itemId, yearMonth])
+}
+
+// Mismo rol que PendingDeletion pero para un pedido de pago de cuota
+// ambiguo (más de un candidato por nombre) — a lo sumo una fila a la vez,
+// y comparte el slot único de confirmación pendiente con Reminder y
+// PendingDeletion (ver Task 16).
+model PendingCuotaPayment {
+  id   String @id @default(cuid())
+  // JSON-encoded CuotaCandidateRef[] — cada entrada
+  // { kind: "item", id } | { kind: "group", id }, candidatos entre los que
+  // hay que elegir (ver src/lib/whatsapp/cuotaMatch.ts, Task 15).
+  candidates          String
+  // Monto declarado por el usuario en el pedido original, si lo dio (ej.
+  // "pagué la tarjeta mastercard, 85000") — se aplica al candidato elegido
+  // una vez desambiguado.
+  overrideAmountCents Int?
+  requestedAt         DateTime @default(now())
+}
+
+// Mismo rol que PendingDeletion/PendingCuotaPayment pero para una consulta
+// de factibilidad de compra con un dato necesario todavía sin responder —
+// a lo sumo una fila a la vez, comparte el slot único de confirmación
+// pendiente con Reminder, PendingDeletion y PendingCuotaPayment (Task 6 de
+// este plan).
+model PendingPurchaseSimulation {
+  id               String   @id @default(cuid())
+  conversationText String
+  missingField     String // "price" | "mode" | "installments" | "interest"
+  requestedAt      DateTime @default(now())
+}
+
+// Confirmación pendiente de un ticket/factura leído por foto con confianza
+// menor al umbral (RECEIPT_CONFIDENCE_THRESHOLD en ocrReceipt.ts) — quinto
+// estado de la familia Reminder/PendingDeletion/PendingCuotaPayment/
+// PendingPurchaseSimulation, mismo invariante de "a lo sumo uno vivo a la
+// vez entre los cinco" (enforced en router.ts, nunca en el schema).
+model PendingReceiptConfirmation {
+  id          String   @id @default(cuid())
+  amountCents Int
+  category    String
+  occurredAt  DateTime
+  requestedAt DateTime @default(now())
+}
+
+// Universal idempotency ledger for WhatsApp messages: one row per message
+// id the bot has ever handled (whatever the outcome — capture, query answer,
+// confirmation reply) or itself sent into the self-chat ("self_sent"), so a
+// redelivery (offline "append" batch, history-sync replay, echo of the
+// bot's own message) never has its effect applied twice. Note's own
+// @unique whatsappMessageId only ever protected captures.
+model ProcessedMessage {
+  whatsappMessageId String   @id
+  // "processing" | "capture" | "query" | "confirmation" | "self_sent" ...
+  // — diagnostic only (e.g. to spot a capture the LLM misread as a query).
+  outcome           String?
+  processedAt       DateTime @default(now())
+}

@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    # Falla con un mensaje claro ("env file .env not found") si no existe
+    # todavía — ver sección "Probar rápido con Docker" del README.
+    env_file: .env
+    environment:
+      # Override Docker-only de lo que diga .env's DATABASE_URL (esta
+      # variable gana por venir de `environment:`, no de `env_file:`). La
+      # base sqlite vive en su propio directorio /app/data, NUNCA dentro de
+      # /app/prisma — ver el comentario del volumen app_data más abajo para
+      # el por qué. deploy/README.md (VM) sigue con su propia convención
+      # file:./prod.db relativa a prisma/, sin cambios.
+      - DATABASE_URL=file:/app/data/prod.db
+    volumes:
+      # Solo el ARCHIVO de datos sqlite persiste entre upgrades — nunca
+      # /app/prisma (schema.prisma + migrations/): un volumen nombrado solo
+      # se puebla desde la imagen la PRIMERA vez que se crea, así que si
+      # montáramos /app/prisma ahí, un `git pull` + `docker compose up
+      # --build` sobre un volumen ya existente seguiría viendo el
+      # schema/migraciones VIEJOS horneados en el volumen, tapando los
+      # nuevos que trae la imagen — `prisma migrate deploy` (el CMD del
+      # Dockerfile) nunca aplicaría una migración nueva aunque el cliente
+      # Prisma generado ya espere el schema nuevo. Montando solo /app/data,
+      # schema y migraciones SIEMPRE vienen de la imagen actual.
+      - app_data:/app/data
+      # Persiste la sesión de WhatsApp (Baileys) — perder este volumen
+      # obliga a re-escanear el QR.
+      - wa_auth:/app/.wa-auth
+    restart: unless-stopped
+
+volumes:
+  app_data:
+  wa_auth:

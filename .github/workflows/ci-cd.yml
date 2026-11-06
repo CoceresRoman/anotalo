@@ -1,0 +1,101 @@
+name: CI/CD
+
+# Runs the suite + a real `next build` on every push/PR (this is what would
+# have caught both the stale-Prisma-client type error and, earlier, a
+# deprecated-model classification bug before they ever reached the VM).
+# Deploy only fires on a push to main, and only after the test job passes.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test & build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - run: npm ci
+
+      # `npm ci` does not run this repo's own postinstall equivalent — there
+      # isn't one (see deploy/README.md's deploy step) — so the Prisma
+      # client has to be generated explicitly, every time, or TypeScript
+      # fails to see model fields added since the last generate.
+      - run: npx prisma generate
+
+      - run: npx vitest run
+
+      # Dummy, non-secret values matching .env.test — `next build` doesn't
+      # load .env.test (that's loaded by vitest.setup.ts for the suite
+      # above), but some module-scope code still expects these to be set.
+      # None of this touches the real production database or credentials.
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: "file:./ci.db"
+          SESSION_SECRET: "ci-session-secret-not-used-in-prod"
+          WEBAPP_USERNAME: "ci"
+          WEBAPP_PASSWORD_HASH: "$2b$10$nV6LPKK7Mr9MsLgAICS2d.Jg9aZ3jq2F0F4IwGBY40GeycNmJN64y"
+          # Without this, `next build`'s type-checking step OOMs on the
+          # GitHub Actions runner now that the codebase has grown (observed
+          # failing the same way on the PR #4, #5 and #6 merges to main:
+          # "JavaScript heap out of memory" mid type-check). Same fix the
+          # VM deploy step already applies for the same reason (see
+          # deploy/README.md), just never mirrored here.
+          NODE_OPTIONS: "--max-old-space-size=4096"
+
+  deploy:
+    name: Deploy to production
+    needs: test
+    # Gated on a repository VARIABLE (not a secret — secrets can't be read
+    # in a job-level `if`). Without ENABLE_DEPLOY=true set, this job is
+    # skipped entirely instead of running and failing (red X) on every push
+    # to main — which is what happens on a brand-new repo (public or a
+    # self-hoster's own) before the 3 deploy secrets exist. See
+    # deploy/README.md section 17 for how to turn this on.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.ENABLE_DEPLOY == 'true'
+    runs-on: ubuntu-latest
+    # Serializes deploys if two pushes to main land close together — never
+    # run a second deploy on top of one still in flight on the VM.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      # Mirrors the manual recovery steps used on 2026-10-30 (see
+      # deploy/README.md): stop the app first to free RAM on the 1GB VM,
+      # pull, reinstall, regenerate the Prisma client, apply pending
+      # migrations, build with headroom into swap, then restart.
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script_stop: true
+          # Default is 10m, which the build alone can exceed on this 1GB VM
+          # (type-checking swapped and took ~7m on its own in a real run on
+          # 2026-10-30) before even reaching pm2 restart. 25m leaves real
+          # headroom over that observed worst case.
+          command_timeout: 25m
+          script: |
+            set -euo pipefail
+            cd ~/notas-whatsapp
+            pm2 stop notas-whatsapp
+            git fetch origin main
+            git reset --hard origin/main
+            npm install
+            npx prisma generate
+            npx prisma migrate deploy
+            NODE_OPTIONS="--max-old-space-size=3072" npm run build
+            pm2 restart notas-whatsapp
+            pm2 status

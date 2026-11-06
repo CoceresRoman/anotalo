@@ -1,0 +1,36 @@
+# Caddy config for notas-whatsapp.
+#
+# Caddy is the ONLY process allowed to be reachable from the internet on
+# this VM (ports 80/443). The Next.js app itself is started bound to
+# 127.0.0.1:3000 (see deploy/pm2.config.cjs) and is not reachable directly.
+# This matters beyond "defense in depth": the login route's rate limiter
+# (src/lib/rateLimit.ts) trusts the `x-forwarded-for` header on every
+# request, and that header is only trustworthy when Caddy is the sole
+# source of it. If the app were reachable directly (e.g. bound to 0.0.0.0,
+# or Caddy bypassed via a firewall hole), anyone on the internet could set
+# their own `x-forwarded-for` and dodge the 5-attempts/minute login limit
+# entirely.
+#
+your-domain.example.com {
+	# Automatic HTTPS: Caddy requests and renews a Let's Encrypt certificate
+	# for this domain on its own (via the ACME HTTP-01 challenge, which
+	# needs port 80 reachable from the internet) and redirects plain HTTP to
+	# HTTPS. No manual certbot/cron renewal needed.
+	# Explicit Host/X-Forwarded-* headers: without these, Next.js's
+	# middleware (src/middleware.ts) builds its login redirect from the
+	# wrong origin (observed: "https://localhost:3000/login" instead of
+	# this domain), sending the browser to an address nothing outside the
+	# VM can reach.
+	reverse_proxy 127.0.0.1:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Reasonable defaults for a small single-user app: gzip responses, and
+	# keep an access log for debugging/abuse investigation.
+	encode gzip
+	log {
+		output file /var/log/caddy/notas-whatsapp.log
+	}
+}

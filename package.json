@@ -1,0 +1,45 @@
+{
+  "name": "notas-whatsapp",
+  "version": "0.1.0",
+  "license": "MIT",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "@types/bcrypt": "^6.0.0",
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "bcrypt": "^6.0.0",
+    "googleapis": "^188.0.0",
+    "groq-sdk": "^1.6.0",
+    "next": "14.2.35",
+    "prisma": "^6.19.3",
+    "qrcode": "^1.5.4",
+    "react": "^18",
+    "react-dom": "^18",
+    "vitest": "^2.1.9",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "autoprefixer": "^10.6.2",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5"
+  },
+  "allowScripts": {
+    "bcrypt@6.0.0": true,
+    "esbuild@0.21.5": true,
+    "protobufjs@7.6.6": true,
+    "@prisma/client@6.19.3": true,
+    "prisma@6.19.3": true,
+    "@prisma/engines@6.19.3": true,
+    "@whiskeysockets/baileys@7.0.0-rc14": true
+  }
+}
